@@ -20,7 +20,7 @@ from bharat_kernel_pytorch.dataloader import get_kernelbook_dataloader
 
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Qwen Coder on GPUMODE/KernelBook SFT dataset")
-    parser.add_argument("--model_id", type=str, default="Qwen/Qwen2.5-Coder-7B", help="Pretrained model ID")
+    parser.add_argument("--model_id", type=str, default="Qwen2.5-Coder-7B-Instruct", help="Pretrained model ID")
     parser.add_argument("--batch_size", type=int, default=2, help="Batch size per device")
     parser.add_argument("--learning_rate", type=float, default=2e-5, help="Learning rate")
     parser.add_argument("--num_epochs", type=int, default=3, help="Number of training epochs")
@@ -85,13 +85,13 @@ def main():
     train_dataloader = get_kernelbook_dataloader(
         tokenizer=tokenizer,
         batch_size=args.batch_size,
-        max_seq_length=args.max_seq_length,
+        # max_seq_length=args.max_seq_length,
         split=args.train_split
     )
     eval_dataloader = get_kernelbook_dataloader(
         tokenizer=tokenizer,
         batch_size=args.batch_size,
-        max_seq_length=args.max_seq_length,
+        # max_seq_length=args.max_seq_length,
         split=args.eval_split
     )
 
