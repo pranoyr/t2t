@@ -160,6 +160,12 @@ def main():
         mixed_precision="bf16"
     )
     
+    print(f"[Process {accelerator.process_index}] Using device: {accelerator.device}")
+    accelerator.wait_for_everyone()
+    
+    if accelerator.is_main_process:
+        accelerator.print(f"🌍 Distributed setup complete: {accelerator.num_processes} active process(es)")
+    
     if accelerator.is_main_process and wandb is not None:
         wandb.init(
             project="bharat-kernel",
