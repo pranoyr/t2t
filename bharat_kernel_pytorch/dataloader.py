@@ -49,6 +49,10 @@ class KernelBookDataset(Dataset):
         )["input_ids"]
         prompt_len = len(prompt_ids)
 
+        # CRITICAL SAFEGUARD: Never allow 100% of the sequence to be masked out.
+        # This prevents PyTorch from throwing a NaN loss if a sample has an empty completion.
+        if len(input_ids) > 0:
+            prompt_len = min(prompt_len, len(input_ids) - 1)
     
         labels = input_ids.clone()
         labels[:prompt_len] = -100
@@ -66,24 +70,59 @@ def get_kernelbook_dataloader(tokenizer, batch_size=2, max_seq_length=None, spli
     Downloads GPUMODE/KernelBook, formats it for ChatML, applies target masking, 
     and returns a ready-to-use PyTorch DataLoader with dynamic padding (no truncation by default).
     """
-    print("Downloading GPUMODE/KernelBook dataset...")
-    raw_dataset = load_dataset("GPUMODE/KernelBook", split=split)
+    print("Loading filtered local dataset...")
+    raw_dataset = load_dataset("json", data_files="filtered_kernelbook.jsonl", split="train")
     
     def format_to_messages(example):
         # Gracefully handle varying column names in case of dataset updates
-        user_prompt = example.get("prompt", example.get("instruction", example.get("question", example.get("python_code", ""))))
+        raw_python_code = example.get("prompt", example.get("instruction", example.get("question", example.get("python_code", ""))))
         target_kernel = example.get("completion", example.get("output", example.get("answer", example.get("triton_code", ""))))
+        
+        # We append the exact verbose prompt the user uses during inference to perfectly align the model
+        verbose_instruction = (
+            "You are given a pytorch function, and your task is to write the same\n"
+            "triton implementation for it.\n"
+            "The triton implementation should change the name from Model to\n"
+            "ModelNew, and have same input and output as the pytorch function.\n\n"
+            "Optimize the architecture with custom Triton kernels! Name your\n"
+            "optimized output architecture ModelNew. Output the new code in\n"
+            "codeblocks. Please generate real code, NOT pseudocode, make sure the\n"
+            "code compiles and is fully functional. Just output the new model\n"
+            "code, no input and init function, no other text, and NO testing\n"
+            "code! **Return ONLY Python code using `@triton.jit`. Remember to Name your optimized output architecture\n"
+            "ModelNew, do not use Model again!**\n\n"
+            "Now, you need to write the triton implementation for the following\n"
+            "pytorch code:\n```python\n"
+            f"{raw_python_code}\n```"
+        )
         
         return {
             "messages": [
-                {"role": "system", "content": "You are an expert GPU kernel developer. Write optimized CUDA/Triton kernels."},
-                {"role": "user", "content": user_prompt},
+                {"role": "system", "content": "You are an expert GPU kernel developer specialized in writing highly optimized Triton kernels."},
+                {"role": "user", "content": verbose_instruction},
                 {"role": "assistant", "content": target_kernel}
             ]
         }
         
     print("Formatting dataset into ChatML structure...")
     formatted_dataset = raw_dataset.map(format_to_messages, remove_columns=raw_dataset.column_names)
+    
+    if max_seq_length is not None:
+        print(f"Filtering out samples exceeding max_seq_length ({max_seq_length})...")
+        def filter_long_samples(example):
+            messages = example["messages"]
+            
+            # Remove samples that have an empty target completion (which causes 100% masking)
+            if not any(m["role"] == "assistant" and m["content"].strip() != "" for m in messages):
+                return False
+                
+            full_text = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=False)
+            tokenized = tokenizer(full_text, truncation=False)
+            return len(tokenized["input_ids"]) <= max_seq_length
+            
+        original_size = len(formatted_dataset)
+        formatted_dataset = formatted_dataset.filter(filter_long_samples)
+        print(f"Filtered dataset from {original_size} to {len(formatted_dataset)} samples.")
     
     print("Initializing PyTorch Dataset with target masking...")
     train_dataset = KernelBookDataset(
